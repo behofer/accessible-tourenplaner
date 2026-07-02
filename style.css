@@ -1,0 +1,178 @@
+/* Barrierefreier Tourenplaner – Stylesheet
+   Grundsätze: hoher Kontrast, große Schrift, sichtbarer Fokus,
+   klare Struktur, funktioniert mit Browser-Zoom bis 400 %. */
+
+:root {
+  --text: #1a1a1a;
+  --background: #ffffff;
+  --accent: #00504e;        /* Kontrast zu Weiß > 7:1 */
+  --accent-text: #ffffff;
+  --border: #4a4a4a;
+  --focus: #b34700;
+  --surface: #f2f2f2;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --text: #f0f0f0;
+    --background: #121212;
+    --accent: #7fd8d4;
+    --accent-text: #00201f;
+    --border: #9a9a9a;
+    --focus: #ffb066;
+    --surface: #1f1f1f;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 1.125rem;
+  line-height: 1.6;
+  color: var(--text);
+  background: var(--background);
+  max-width: 46rem;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+h1 { font-size: 1.8rem; line-height: 1.3; }
+h2 { font-size: 1.4rem; margin-top: 2rem; }
+h3 { font-size: 1.2rem; margin-top: 1.5rem; }
+h4 { font-size: 1.05rem; margin-top: 1.25rem; }
+h5 { font-size: 1rem; }
+
+a { color: var(--accent); }
+
+/* Skip-Link: erst bei Tastaturfokus sichtbar */
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  background: var(--accent);
+  color: var(--accent-text);
+  padding: 0.75rem 1rem;
+  z-index: 10;
+}
+.skip-link:focus {
+  left: 0;
+}
+
+/* Deutlich sichtbarer Fokus überall */
+:focus {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.untertitel { font-size: 1.05rem; }
+.hinweis { font-size: 0.95rem; margin: 0.25rem 0 0 0; }
+
+.formularfeld { margin-bottom: 1.25rem; }
+
+label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+}
+
+input[type="text"], select {
+  width: 100%;
+  font-size: 1.125rem;
+  padding: 0.6rem 0.7rem;
+  border: 2px solid var(--border);
+  border-radius: 4px;
+  background: var(--background);
+  color: var(--text);
+}
+
+button {
+  font-size: 1.125rem;
+  font-weight: 600;
+  padding: 0.75rem 1.5rem;
+  border: 2px solid var(--accent);
+  border-radius: 4px;
+  background: var(--accent);
+  color: var(--accent-text);
+  cursor: pointer;
+  min-height: 44px;
+  min-width: 44px;
+}
+
+button:hover { filter: brightness(1.15); }
+
+button[disabled] {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+#status {
+  font-weight: 600;
+  min-height: 1.5rem;
+}
+
+/* Tabs für die drei Bereiche */
+[role="tablist"] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  border-bottom: 2px solid var(--border);
+  padding-bottom: 0.75rem;
+  margin-top: 1.5rem;
+}
+
+[role="tab"] {
+  background: var(--surface);
+  color: var(--text);
+  border: 2px solid var(--border);
+}
+
+[role="tab"][aria-selected="true"] {
+  background: var(--accent);
+  color: var(--accent-text);
+  border-color: var(--accent);
+}
+
+[role="tabpanel"] > h2:first-child {
+  margin-top: 1rem;
+}
+
+#ortsauswahl, #ergebnis, #komoot-ergebnis, #wege-ergebnis {
+  border-top: 2px solid var(--border);
+  padding-top: 0.5rem;
+  margin-top: 2rem;
+}
+
+dl#uebersicht-liste, dl#komoot-uebersicht {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.35rem 1rem;
+}
+dl#uebersicht-liste dt, dl#komoot-uebersicht dt { font-weight: 600; }
+dl#uebersicht-liste dd, dl#komoot-uebersicht dd { margin: 0; }
+
+ol#wegbeschreibung-liste li,
+ul#hoehenprofil-liste li,
+ul#highlights-liste li {
+  margin-bottom: 0.6rem;
+}
+
+.anleitung {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.5rem 1rem;
+  margin-top: 1rem;
+}
+
+footer {
+  margin-top: 3rem;
+  border-top: 2px solid var(--border);
+  font-size: 0.95rem;
+}
+footer h2 { font-size: 1.1rem; }
+
+/* Reduzierte Bewegung respektieren (POC hat keine Animationen, zur Sicherheit) */
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}

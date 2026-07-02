@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Barrierefreier Tourenplaner – Wandern &amp; Rad</title>
+  <meta name="description" content="Screenreader-freundlicher Tourenplaner: Routen von A nach B berechnen, Komoot-Touren als Text anzeigen, markierte Wege finden. GPX-Export für Komoot und andere Apps.">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a href="#hauptinhalt" class="skip-link">Zum Hauptinhalt springen</a>
+
+  <header>
+    <h1>Barrierefreier Tourenplaner</h1>
+    <p class="untertitel">
+      Wander- und Radtouren planen, Komoot-Touren lesen und markierte Wege finden –
+      vollständig als Text, ohne Karte. Routen lassen sich als GPX-Datei speichern
+      und in Komoot oder andere Apps importieren.
+    </p>
+  </header>
+
+  <main id="hauptinhalt">
+    <div role="tablist" aria-label="Bereiche" id="bereiche-tabs">
+      <button type="button" role="tab" id="tab-planer" aria-selected="true"
+              aria-controls="panel-planer">Tourenplaner</button>
+      <button type="button" role="tab" id="tab-komoot" aria-selected="false"
+              aria-controls="panel-komoot" tabindex="-1">Komoot-Tour als Text anzeigen</button>
+      <button type="button" role="tab" id="tab-wege" aria-selected="false"
+              aria-controls="panel-wege" tabindex="-1">Markierte Wege finden</button>
+    </div>
+
+    <!-- Statusmeldungen für Screenreader (Live-Region, gilt für alle Bereiche) -->
+    <p id="status" role="status" aria-live="polite"></p>
+
+    <!-- ================= Bereich 1: Tourenplaner ================= -->
+    <section role="tabpanel" id="panel-planer" aria-labelledby="tab-planer" tabindex="0">
+      <h2 id="planung-titel">Route planen</h2>
+
+      <form id="routen-formular">
+        <div class="formularfeld">
+          <label for="aktivitaet">Aktivität</label>
+          <select id="aktivitaet" name="aktivitaet">
+            <option value="wandern" selected>Wandern</option>
+            <option value="fahrrad">Fahrrad (Touren-/Trekkingrad)</option>
+            <option value="mountainbike">Mountainbike</option>
+            <option value="rennrad">Rennrad</option>
+          </select>
+        </div>
+
+        <div class="formularfeld">
+          <label for="start">Startort</label>
+          <input type="text" id="start" name="start" required
+                 autocomplete="off" spellcheck="false"
+                 placeholder="z. B. Saulgrub"
+                 aria-describedby="start-hinweis">
+          <p id="start-hinweis" class="hinweis">Ortsname, Adresse oder Bahnhof eingeben.</p>
+        </div>
+
+        <div class="formularfeld">
+          <label for="via">Zwischenziel (optional)</label>
+          <input type="text" id="via" name="via"
+                 autocomplete="off" spellcheck="false"
+                 placeholder="z. B. Hinteres Hörnle">
+        </div>
+
+        <div class="formularfeld">
+          <label for="ziel">Zielort</label>
+          <input type="text" id="ziel" name="ziel" required
+                 autocomplete="off" spellcheck="false"
+                 placeholder="z. B. Bad Kohlgrub">
+        </div>
+
+        <button type="submit" id="berechnen-knopf">Route berechnen</button>
+      </form>
+
+      <!-- Auswahl bei mehrdeutigen Orten -->
+      <section id="ortsauswahl" aria-labelledby="ortsauswahl-titel" hidden>
+        <h3 id="ortsauswahl-titel">Gefundene Orte prüfen</h3>
+        <p>Bitte prüfen Sie, ob die gefundenen Orte stimmen. Bei Bedarf können Sie eine Alternative auswählen.</p>
+        <div id="ortsauswahl-felder"></div>
+        <button type="button" id="neu-berechnen-knopf">Mit dieser Auswahl neu berechnen</button>
+      </section>
+
+      <!-- Ergebnis -->
+      <section id="ergebnis" aria-labelledby="ergebnis-titel" hidden>
+        <h3 id="ergebnis-titel">Ihre Route</h3>
+
+        <section aria-labelledby="uebersicht-titel">
+          <h4 id="uebersicht-titel">Übersicht</h4>
+          <dl id="uebersicht-liste"></dl>
+        </section>
+
+        <section aria-labelledby="hoehenprofil-titel">
+          <h4 id="hoehenprofil-titel">Höhenprofil als Text</h4>
+          <ul id="hoehenprofil-liste"></ul>
+        </section>
+
+        <section aria-labelledby="wegbeschreibung-titel">
+          <h4 id="wegbeschreibung-titel">Wegbeschreibung</h4>
+          <ol id="wegbeschreibung-liste"></ol>
+        </section>
+
+        <section aria-labelledby="highlights-titel">
+          <h4 id="highlights-titel">Sehenswertes entlang der Route</h4>
+          <p id="highlights-status"></p>
+          <ul id="highlights-liste"></ul>
+        </section>
+
+        <section aria-labelledby="wegarten-hinweis-titel">
+          <h4 id="wegarten-hinweis-titel">Hinweis zur Wegewahl</h4>
+          <p>
+            Die Route wird mit einem Wanderprofil berechnet, das markierte Wanderwege,
+            Pfade und Wald-/Feldwege bevorzugt und Bundes- und Hauptstraßen möglichst
+            vermeidet. Die Zeile „Wegarten“ in der Übersicht zeigt die tatsächliche
+            Zusammensetzung.
+          </p>
+        </section>
+
+        <section aria-labelledby="speichern-titel">
+          <h4 id="speichern-titel">Route speichern und nach Komoot übertragen</h4>
+          <button type="button" id="gpx-knopf">GPX-Datei herunterladen</button>
+          <div class="anleitung">
+            <h5>So importieren Sie die GPX-Datei in Komoot</h5>
+            <ol>
+              <li>Öffnen Sie <a href="https://www.komoot.com/upload" target="_blank" rel="noopener">komoot.com/upload (öffnet in neuem Tab)</a> und melden Sie sich an.</li>
+              <li>Wählen Sie die heruntergeladene GPX-Datei aus (Dateiname beginnt mit „tour-“).</li>
+              <li>Wählen Sie „Als geplante Tour speichern“. Die Route erscheint dann in Ihrem Komoot-Profil und kann in der App zur Navigation genutzt werden.</li>
+            </ol>
+            <p>Die GPX-Datei funktioniert auch in anderen Apps, zum Beispiel OsmAnd, Organic Maps, Garmin Connect oder Outdooractive.</p>
+          </div>
+        </section>
+      </section>
+    </section>
+
+    <!-- ================= Bereich 2: Komoot-Tour als Text anzeigen ================= -->
+    <section role="tabpanel" id="panel-komoot" aria-labelledby="tab-komoot" tabindex="0" hidden>
+      <h2 id="komoot-titel">Komoot-Tour als Text anzeigen</h2>
+      <p>
+        Fügen Sie den Link zu einer öffentlichen Komoot-Tour ein (zum Beispiel aus
+        einer geteilten Tour, einer Collection oder dem Komoot-Entdecken-Bereich).
+        Die Tour wird dann vollständig als Text angezeigt – ohne Karte.
+      </p>
+      <form id="komoot-formular">
+        <div class="formularfeld">
+          <label for="komoot-url">Komoot-Link oder Tour-Nummer</label>
+          <input type="text" id="komoot-url" name="komoot-url" required
+                 autocomplete="off" spellcheck="false"
+                 placeholder="z. B. https://www.komoot.com/tour/123456789"
+                 aria-describedby="komoot-hinweis">
+          <p id="komoot-hinweis" class="hinweis">
+            Funktioniert mit öffentlichen Touren und Smart-Touren. Private Touren
+            benötigen einen Freigabe-Link.
+          </p>
+        </div>
+        <button type="submit" id="komoot-lesen-knopf">Tour anzeigen</button>
+      </form>
+
+      <section id="komoot-ergebnis" aria-labelledby="komoot-detail-titel" hidden>
+        <h3 id="komoot-detail-titel">Tour im Detail</h3>
+        <dl id="komoot-uebersicht"></dl>
+        <h4>Wegbeschreibung</h4>
+        <ol id="komoot-wegbeschreibung"></ol>
+        <button type="button" id="komoot-gpx-knopf" hidden>GPX-Datei dieser Tour herunterladen</button>
+      </section>
+    </section>
+
+    <!-- ================= Bereich 3: Markierte Wege finden ================= -->
+    <section role="tabpanel" id="panel-wege" aria-labelledby="tab-wege" tabindex="0" hidden>
+      <h2 id="wege-titel">Markierte Wander- und Radwege finden</h2>
+      <p>
+        Findet offiziell markierte und ausgeschilderte Wege rund um einen Ort –
+        zum Beispiel Fernwanderwege, regionale Rundwege oder Themenwege.
+        Datenquelle ist OpenStreetMap.
+      </p>
+      <form id="wege-formular">
+        <div class="formularfeld">
+          <label for="wege-ort">Ort</label>
+          <input type="text" id="wege-ort" name="wege-ort" required
+                 autocomplete="off" spellcheck="false"
+                 placeholder="z. B. Saulgrub">
+        </div>
+        <div class="formularfeld">
+          <label for="wege-art">Wegart</label>
+          <select id="wege-art" name="wege-art">
+            <option value="wandern" selected>Wanderwege</option>
+            <option value="rad">Radwege</option>
+          </select>
+        </div>
+        <button type="submit" id="wege-suchen-knopf">Wege suchen</button>
+      </form>
+
+      <section id="wege-ergebnis" aria-labelledby="wege-liste-titel" hidden>
+        <h3 id="wege-liste-titel">Markierte Wege</h3>
+        <p id="wege-status"></p>
+        <ul id="wege-liste"></ul>
+      </section>
+    </section>
+  </main>
+
+  <footer>
+    <h2>Genutzte Schnittstellen</h2>
+    <p>
+      Dieser Tourenplaner ist ein Proof of Concept für einen barrierefreien Zugang
+      zur Tourenplanung. Er nutzt ausschließlich offen zugängliche Dienste, ohne
+      API-Schlüssel und ohne Anmeldung:
+    </p>
+    <ul>
+      <li><strong>Photon</strong> (photon.komoot.io) – Ortssuche. Offener Geocoder auf OpenStreetMap-Basis, betrieben von Komoot.</li>
+      <li><strong>BRouter</strong> (brouter.de) – Routenberechnung mit Wanderweg-Präferenz und Höhendaten.</li>
+      <li><strong>Valhalla</strong> (valhalla1.openstreetmap.de, FOSSGIS e. V.) – deutsche Abbiegehinweise, Ersatz-Routing.</li>
+      <li><strong>Open-Meteo</strong> (api.open-meteo.com) – Höhendaten, falls BRouter nicht verfügbar ist.</li>
+      <li><strong>Overpass API</strong> (overpass-api.de) – Sehenswürdigkeiten aus OpenStreetMap entlang der Route.</li>
+      <li><strong>Komoot-API</strong> (www.komoot.com/api/v007) – nur lesender Zugriff auf öffentliche Komoot-Touren.</li>
+      <li><strong>Waymarked Trails</strong> (waymarkedtrails.org) – offiziell markierte Wander- und Radwege aus OpenStreetMap.</li>
+    </ul>
+    <p>Kartendaten: © OpenStreetMap-Mitwirkende (ODbL).</p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
