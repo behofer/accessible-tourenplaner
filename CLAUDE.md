@@ -41,6 +41,15 @@ Deshalb:
    Valhalla, den Bergpfaden zu folgen.
 3. Fallback bei BRouter-Ausfall: direktes Valhalla-Routing + Open-Meteo-Höhen.
 
+**„Mein Standort“ als Start**: Geolocation-API, bewusst **ohne Reverse-Geocoding**
+(auf Tour gibt es keine Adresse). Der Fix wird als synthetisches Photon-Feature
+(`properties.name = "Mein Standort"`) in `state.places.start` eingespeist, der
+restliche Ablauf bleibt unverändert. Erkennung über `isLocationQuery()`
+(Eingabe beginnt mit „mein standort“); beim Berechnen wird immer frisch
+geortet (Rückfall: letzter Fix, höchstens 5 Minuten alt). Zweistufige Ortung:
+GPS mit 12 s Timeout, danach Netzwerkortung. Braucht Secure Context
+(https oder localhost).
+
 **Komoot-Tour-Anzeige**: Öffentliche Komoot-Touren sind **anonym lesbar** —
 `www.komoot.com/api/v007/tours/{id}` bzw. `smart_tours/{id}`, plus
 `/directions` und `/coordinates` (Header `Accept: application/hal+json` nötig).
