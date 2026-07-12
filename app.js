@@ -39,6 +39,7 @@ const state = {
   chosen: {},        // feldname -> Index des gewählten Treffers
   route: null,       // letzte berechnete Route (für GPX-Export)
   komootTour: null,  // zuletzt geladene Komoot-Tour (für GPX-Export)
+  lastPosition: null, // letzter Geolocation-Fix { lat, lon, accuracy, timestamp }
 };
 
 const el = (id) => document.getElementById(id);
@@ -149,6 +150,133 @@ async function geocode(query) {
   if (!res.ok) throw new Error(`Ortssuche fehlgeschlagen (HTTP ${res.status})`);
   const data = await res.json();
   return (data.features || []).filter((f) => f.geometry && f.geometry.type === "Point");
+}
+
+// ---------------------------------------------------------------------------
+// Standortbestimmung (Geolocation-API des Browsers)
+//
+// „Mein Standort“ läuft bewusst ohne Reverse-Geocoding: Auf Tour gibt es oft
+// keine Adresse, die Koordinaten reichen für BRouter/Valhalla vollständig aus.
+// Der Standort wird als synthetisches Photon-Feature in die bestehende
+// Orts-Pipeline eingespeist (state.places), damit der restliche Ablauf
+// unverändert funktioniert.
+// ---------------------------------------------------------------------------
+
+const LOCATION_NAME = "Mein Standort";
+
+// Erkennt sowohl den vom Knopf eingetragenen Text „Mein Standort (47.65, 11.03)“
+// als auch ein von Hand getipptes „mein Standort“
+function isLocationQuery(query) {
+  return /^mein standort\b/i.test(query.trim());
+}
+
+function getPositionOnce(options) {
+  return new Promise((resolve, reject) => {
+    navigator.geolocation.getCurrentPosition(resolve, reject, options);
+  });
+}
+
+function geolocationErrorMessage(err) {
+  if (err && typeof err.code === "number") {
+    if (err.code === 1) {
+      return "Der Zugriff auf den Standort wurde nicht erlaubt. Bitte erlauben Sie " +
+        "die Standortfreigabe für diese Seite in den Browser-Einstellungen und " +
+        "versuchen Sie es erneut – oder tippen Sie den Startort ein.";
+    }
+    if (err.code === 2) {
+      return "Der Standort konnte nicht bestimmt werden (kein GPS- oder Netzwerk-Signal). " +
+        "Bitte erneut versuchen oder den Startort eintippen.";
+    }
+    if (err.code === 3) {
+      return "Die Standortbestimmung hat zu lange gedauert. Bitte erneut versuchen – " +
+        "unter freiem Himmel klappt es meist besser.";
+    }
+  }
+  return "Der Standort konnte nicht ermittelt werden. Bitte den Startort eintippen.";
+}
+
+// Robuste Ortung: erst präzise (GPS), bei Zeitüberschreitung ein zweiter,
+// schnellerer Versuch per Netzwerkortung. Liefert { lat, lon, accuracy, timestamp }.
+async function locateUser() {
+  if (!("geolocation" in navigator)) {
+    throw new Error("Dieser Browser unterstützt keine Standortabfrage. Bitte den Startort eintippen.");
+  }
+  if (window.isSecureContext === false) {
+    throw new Error("Die Standortabfrage funktioniert nur über eine sichere Verbindung (https oder localhost).");
+  }
+  let position;
+  try {
+    position = await getPositionOnce({ enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 });
+  } catch (err) {
+    if (err && err.code === 3) {
+      // GPS-Fix dauert zu lange -> grobe, aber schnelle Netzwerkortung reicht zum Routen
+      position = await getPositionOnce({ enableHighAccuracy: false, timeout: 8000, maximumAge: 300000 });
+    } else {
+      throw err;
+    }
+  }
+  const fix = {
+    lat: position.coords.latitude,
+    lon: position.coords.longitude,
+    accuracy: position.coords.accuracy,
+    timestamp: position.timestamp || Date.now(),
+  };
+  state.lastPosition = fix;
+  return fix;
+}
+
+function locationFeature(fix) {
+  return {
+    geometry: { type: "Point", coordinates: [fix.lon, fix.lat] },
+    properties: { name: LOCATION_NAME },
+  };
+}
+
+function locationInputValue(fix) {
+  return `${LOCATION_NAME} (${fix.lat.toFixed(5)}, ${fix.lon.toFixed(5)})`;
+}
+
+function describeAccuracy(fix) {
+  if (!fix.accuracy) return "";
+  const rounded = fix.accuracy < 100 ? Math.max(10, Math.round(fix.accuracy / 10) * 10) : Math.round(fix.accuracy / 100) * 100;
+  let text = `Genauigkeit etwa ${rounded.toLocaleString("de-DE")} Meter.`;
+  if (fix.accuracy > 500) text += " Der Standort ist nur grob bestimmt (Netzwerkortung).";
+  return text;
+}
+
+// Aktuellen Standort als Start-Feature bereitstellen. Schlägt die frische
+// Ortung fehl, dient ein höchstens 5 Minuten alter letzter Fix als Rückfall.
+async function currentLocationFeature() {
+  try {
+    return locationFeature(await locateUser());
+  } catch (err) {
+    const last = state.lastPosition;
+    if (last && Date.now() - last.timestamp < 5 * 60 * 1000) {
+      return locationFeature(last);
+    }
+    throw new Error(geolocationErrorMessage(err));
+  }
+}
+
+// Knopf „Meinen Standort als Start verwenden“
+async function useCurrentLocationAsStart() {
+  const button = el("standort-knopf");
+  button.disabled = true;
+  try {
+    setStatus("Ermittle Standort … Bitte erlauben Sie die Standortabfrage, falls der Browser nachfragt.");
+    const fix = await locateUser();
+    el("start").value = locationInputValue(fix);
+    state.places.start = [locationFeature(fix)];
+    state.chosen.start = 0;
+    setStatus(
+      `Standort gefunden und als Start eingetragen: Breite ${fix.lat.toFixed(5)}, Länge ${fix.lon.toFixed(5)}. ` +
+      `${describeAccuracy(fix)} Sie können jetzt das Ziel eingeben und die Route berechnen.`
+    );
+  } catch (err) {
+    setStatus(`Fehler: ${geolocationErrorMessage(err)}`);
+  } finally {
+    button.disabled = false;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1179,6 +1307,16 @@ async function planRoute({ regeocode }) {
     if (regeocode) {
       setStatus("Suche Orte …");
       for (const field of fields) {
+        if (field === "start" && isLocationQuery(queries.start)) {
+          // Beim Berechnen immer frisch orten – auf Tour ändert sich der
+          // Standort zwischen zwei Berechnungen
+          setStatus("Ermittle aktuellen Standort …");
+          const feature = await currentLocationFeature();
+          el("start").value = locationInputValue(state.lastPosition);
+          state.places.start = [feature];
+          state.chosen.start = 0;
+          continue;
+        }
         state.places[field] = await geocode(queries[field]);
         state.chosen[field] = 0;
         if (state.places[field].length === 0) {
@@ -1292,6 +1430,10 @@ el("routen-formular").addEventListener("submit", (event) => {
 
 el("neu-berechnen-knopf").addEventListener("click", () => {
   planRoute({ regeocode: false });
+});
+
+el("standort-knopf").addEventListener("click", () => {
+  useCurrentLocationAsStart();
 });
 
 el("gpx-knopf").addEventListener("click", () => {

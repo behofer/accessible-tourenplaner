@@ -101,6 +101,14 @@ button {
 
 button:hover { filter: brightness(1.15); }
 
+/* Sekundäre Aktionen (z. B. „Meinen Standort als Start verwenden“) */
+button.nebensaechlich {
+  background: var(--surface);
+  color: var(--text);
+  border-color: var(--border);
+  margin-top: 0.5rem;
+}
+
 button[disabled] {
   opacity: 0.6;
   cursor: wait;

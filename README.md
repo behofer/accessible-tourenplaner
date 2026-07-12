@@ -26,6 +26,7 @@ weiterhin mit der Komoot-App (oder jeder anderen App) möglich ist.
 | Highlights nur aus Komoot | Gipfel, Aussichtspunkte, Hütten, Burgen etc. aus OpenStreetMap, mit Kilometerangabe entlang der Route |
 | Geteilte Komoot-Touren sind in der App schwer zugänglich | „Komoot-Tour vorlesen“: Link einfügen → komplette Tour als Text (Übersicht, Wegarten, Beläge, Abbiegehinweise, GPX) |
 | „Welche fertigen Touren gibt es hier?“ | Suche nach offiziell markierten Wander-/Radwegen der Region (Waymarked Trails/OSM) |
+| Start unterwegs, mitten auf der Tour | „Mein Standort“: Start per Browser-Ortung, rein koordinatenbasiert (kein Reverse-Geocoding nötig, funktioniert also auch abseits von Adressen) |
 
 ## Routenwahl: Wanderwege statt Bundesstraßen (Hybrid-Ansatz)
 

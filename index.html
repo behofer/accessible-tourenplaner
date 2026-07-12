@@ -55,7 +55,14 @@
                  autocomplete="off" spellcheck="false"
                  placeholder="z. B. Saulgrub"
                  aria-describedby="start-hinweis">
-          <p id="start-hinweis" class="hinweis">Ortsname, Adresse oder Bahnhof eingeben.</p>
+          <p id="start-hinweis" class="hinweis">Ortsname, Adresse oder Bahnhof eingeben – oder den aktuellen Standort verwenden.</p>
+          <button type="button" id="standort-knopf" class="nebensaechlich"
+                  aria-describedby="standort-hinweis">Meinen Standort als Start verwenden</button>
+          <p id="standort-hinweis" class="hinweis">
+            Fragt den Standort über den Browser ab (Erlaubnis erforderlich). Es werden nur die
+            Koordinaten verwendet – ohne Adresse, funktioniert also auch unterwegs auf Tour.
+            Beim Berechnen wird der Standort automatisch aktualisiert.
+          </p>
         </div>
 
         <div class="formularfeld">
