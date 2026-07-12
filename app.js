@@ -325,6 +325,23 @@ const POI_LABELS = {
   waterfall: "Wasserfall", chapel: "Kapelle", monastery: "Kloster",
 };
 
+// Overpass ist ein Community-Server und antwortet unter Last mit 429/502/504 –
+// ein Wiederholungsversuch nach kurzer Pause fängt das meiste ab
+async function overpassQuery(query) {
+  for (let attempt = 1; ; attempt++) {
+    const res = await fetch(OVERPASS_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: "data=" + encodeURIComponent(query),
+    });
+    if (res.ok) return res.json();
+    if (attempt >= 4 || ![429, 502, 504].includes(res.status)) {
+      throw new Error(`Overpass nicht erreichbar (HTTP ${res.status})`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, attempt * 4000));
+  }
+}
+
 async function fetchPois(points) {
   // Route auf ~25 Stützpunkte ausdünnen und als Korridor (400 m) abfragen
   const corridor = samplePoints(points, 25)
@@ -343,13 +360,7 @@ async function fetchPois(points) {
       node["building"="chapel"]["name"](around:400,${corridor});
     );
     out body 40;`;
-  const res = await fetch(OVERPASS_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: "data=" + encodeURIComponent(query),
-  });
-  if (!res.ok) throw new Error("Overpass nicht erreichbar");
-  const data = await res.json();
+  const data = await overpassQuery(query);
   return data.elements || [];
 }
 
@@ -388,13 +399,21 @@ function escapeXml(s) {
 }
 
 // route: { name, points: [[lat,lon],...], elevations: [ele,...] | null }
+// oder   { name, segments: [[[lat,lon],...], ...] } für OSM-Relationen,
+// deren Strecke aus mehreren (nicht verbundenen) Wegen besteht
 function buildGpx(route) {
   const name = escapeXml(route.name);
-  const trkpts = route.points
-    .map((p, i) => {
-      const ele = route.elevations ? route.elevations[i] : null;
-      const eleTag = ele !== null && ele !== undefined ? `<ele>${Number(ele).toFixed(1)}</ele>` : "";
-      return `      <trkpt lat="${p[0].toFixed(6)}" lon="${p[1].toFixed(6)}">${eleTag}</trkpt>`;
+  const segments = route.segments || [route.points];
+  const trksegs = segments
+    .map((points) => {
+      const trkpts = points
+        .map((p, i) => {
+          const ele = !route.segments && route.elevations ? route.elevations[i] : null;
+          const eleTag = ele !== null && ele !== undefined ? `<ele>${Number(ele).toFixed(1)}</ele>` : "";
+          return `      <trkpt lat="${p[0].toFixed(6)}" lon="${p[1].toFixed(6)}">${eleTag}</trkpt>`;
+        })
+        .join("\n");
+      return `    <trkseg>\n${trkpts}\n    </trkseg>`;
     })
     .join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -406,9 +425,7 @@ function buildGpx(route) {
   </metadata>
   <trk>
     <name>${name}</name>
-    <trkseg>
-${trkpts}
-    </trkseg>
+${trksegs}
   </trk>
 </gpx>`;
 }
@@ -688,6 +705,314 @@ async function searchMarkedTrails() {
 
     el("wege-ergebnis").hidden = false;
     setStatus(`Wegsuche abgeschlossen: ${results.length} Treffer. Die Liste steht unter der Überschrift „Markierte Wege“.`);
+  } catch (err) {
+    setStatus(`Fehler: ${err.message}`);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Touren in der Nähe: komplette Touren aus OpenStreetMap finden, ohne Start
+// und Ziel zu kennen. Overpass liefert die Routen-Relationen samt Länge und
+// (geclippter) Geometrie; der Waldanteil wird über Stichprobenpunkte entlang
+// der Strecke per is_in gegen landuse=forest / natural=wood geschätzt.
+// ---------------------------------------------------------------------------
+
+const NEARBY_CONFIG = {
+  wandern: { relationFilter: '["route"~"^(hiking|foot)$"]', fallbackKind: "Wanderroute", plural: "Wandertouren" },
+  rad:     { relationFilter: '["route"="bicycle"]',         fallbackKind: "Radroute",    plural: "Radtouren" },
+  mtb:     { relationFilter: '["route"="mtb"]',             fallbackKind: "Mountainbike-Route", plural: "Mountainbike-Touren" },
+};
+
+const NETWORK_LABELS = {
+  lwn: "lokaler Wanderweg", rwn: "regionaler Wanderweg",
+  nwn: "nationaler Fernwanderweg", iwn: "internationaler Fernwanderweg",
+  lcn: "lokales Radnetz", rcn: "regionales Radnetz",
+  ncn: "nationaler Radfernweg", icn: "internationaler Radfernweg",
+};
+
+const NEARBY_MAX_RESULTS = 10;  // Touren pro Suche (begrenzt die Folgeabfragen)
+const FOREST_SAMPLES = 12;      // Stichprobenpunkte je Tour für den Waldanteil
+
+// Der distance-Tag ist laut OSM-Wiki in Kilometern; "12,5", "12.5 km"
+// und explizite Meterangaben ("450 m") kommen trotzdem vor
+function parseDistanceKm(value) {
+  if (!value) return null;
+  const num = parseFloat(String(value).replace(",", "."));
+  if (!isFinite(num) || num <= 0) return null;
+  if (/\d\s*m(?![a-z])/i.test(value) && !/km/i.test(value)) return num / 1000;
+  return num;
+}
+
+// Alle Routen-Relationen im Umkreis, mit Tags, Mittelpunkt und der aus den
+// Mitglieds-Wegen aufsummierten Länge (eine einzige Overpass-Abfrage)
+async function fetchNearbyCandidates(lat, lon, radiusM, art) {
+  const filter = NEARBY_CONFIG[art].relationFilter;
+  const query = `
+    [out:json][timeout:60];
+    relation["type"="route"]${filter}(around:${radiusM},${lat.toFixed(5)},${lon.toFixed(5)})->.routen;
+    .routen out tags center;
+    foreach.routen->.r(
+      way(r.r);
+      make laenge id=r.u(id()), meter=sum(length());
+      out;
+    );`;
+  const data = await overpassQuery(query);
+  const meters = {};
+  const relations = [];
+  for (const e of data.elements || []) {
+    if (e.type === "laenge" && e.tags) meters[e.tags.id] = parseFloat(e.tags.meter) || 0;
+    else if (e.type === "relation") relations.push(e);
+  }
+  return relations.map((r) => {
+    const mappedKm = (meters[String(r.id)] || 0) / 1000;
+    return {
+      id: r.id,
+      tags: r.tags || {},
+      lengthKm: mappedKm > 0.1 ? mappedKm : parseDistanceKm((r.tags || {}).distance),
+      centerKm: r.center ? haversineM(lat, lon, r.center.lat, r.center.lon) / 1000 : null,
+    };
+  });
+}
+
+// Geometrie einer Relation aus einer Overpass-out-geom-Antwort einsammeln
+function relationSegments(rel) {
+  return (rel.members || [])
+    .filter((m) => m.type === "way" && Array.isArray(m.geometry))
+    .map((m) => m.geometry.filter(Boolean).map((g) => [g.lat, g.lon]))
+    .filter((s) => s.length > 1);
+}
+
+// Streckenverläufe mehrerer Relationen, auf das Suchgebiet zugeschnitten
+// (Clipping hält die Antwort klein, auch wenn ein Fernwanderweg dabei ist)
+async function fetchNearbyGeometries(ids, lat, lon, radiusM) {
+  const dLat = (radiusM + 20000) / 111320;
+  const dLon = dLat / Math.cos((lat * Math.PI) / 180);
+  const bbox = `${lat - dLat},${lon - dLon},${lat + dLat},${lon + dLon}`;
+  const data = await overpassQuery(
+    `[out:json][timeout:60];relation(id:${ids.join(",")});out geom(${bbox});`
+  );
+  const segments = {};
+  for (const e of data.elements || []) {
+    if (e.type === "relation") segments[e.id] = relationSegments(e);
+  }
+  return segments;
+}
+
+// Vollständige Geometrie einer einzelnen Relation (für den GPX-Export)
+async function fetchFullTrailGeometry(id) {
+  const data = await overpassQuery(`[out:json][timeout:60];relation(${id});out geom;`);
+  const rel = (data.elements || []).find((e) => e.type === "relation");
+  const segments = rel ? relationSegments(rel) : [];
+  if (!segments.length) throw new Error("Kein Streckenverlauf für diese Tour verfügbar.");
+  return segments;
+}
+
+// Waldanteil je Tour: prüft für Stichprobenpunkte per is_in, ob sie in einer
+// Wald-Fläche liegen. Punkte werden gebündelt abgefragt; schlägt eine
+// Teilabfrage trotz Wiederholungen fehl, bleibt der Waldanteil der
+// betroffenen Touren unbekannt (null), die Suche läuft weiter.
+async function computeForestShares(sampleSets, onProgress) {
+  const jobs = [];
+  sampleSets.forEach((points, routeIndex) => {
+    (points || []).forEach(([lat, lon]) => jobs.push({ routeIndex, lat, lon }));
+  });
+  const inForest = sampleSets.map(() => 0);
+  const failed = new Set();
+  const chunkSize = FOREST_SAMPLES;
+  const chunkCount = Math.ceil(jobs.length / chunkSize);
+  for (let i = 0; i < jobs.length; i += chunkSize) {
+    const chunk = jobs.slice(i, i + chunkSize);
+    if (onProgress) onProgress(i / chunkSize + 1, chunkCount);
+    const query = "[out:json][timeout:30];\n" + chunk.map((j) =>
+      `is_in(${j.lat.toFixed(5)},${j.lon.toFixed(5)})->.p;` +
+      `area.p[~"^(landuse|natural)$"~"^(forest|wood)$"];out count;`
+    ).join("\n");
+    try {
+      const data = await overpassQuery(query);
+      const counts = (data.elements || []).filter((e) => e.type === "count");
+      counts.forEach((c, k) => {
+        if (k < chunk.length && parseInt(c.tags && c.tags.total, 10) > 0) {
+          inForest[chunk[k].routeIndex] += 1;
+        }
+      });
+    } catch (err) {
+      chunk.forEach((j) => failed.add(j.routeIndex));
+    }
+  }
+  return sampleSets.map((points, i) =>
+    points && points.length && !failed.has(i)
+      ? Math.round((inForest[i] / points.length) * 100)
+      : null
+  );
+}
+
+function nearbyTourTitle(tags) {
+  return tags.name || tags.ref || "Unbenannte Tour";
+}
+
+function renderNearbyTours(tours, placeName, art) {
+  const list = el("naehe-liste");
+  list.innerHTML = "";
+  el("naehe-status").textContent = tours.length === 0
+    ? `Rund um ${placeName} wurde keine passende Tour gefunden. Versuchen Sie einen größeren Suchradius oder weniger strenge Filter.`
+    : `${tours.length} ${tours.length === 1 ? "Tour" : "Touren"} rund um ${placeName}, sortiert nach Entfernung (Daten: OpenStreetMap):`;
+
+  for (const tour of tours) {
+    const tags = tour.tags;
+    const li = document.createElement("li");
+    const title = nearbyTourTitle(tags);
+    const parts = [title + (tags.name && tags.ref ? ` (Markierung: ${tags.ref})` : "")];
+    const network = (tags.network || "").split(";")[0].trim();
+    parts.push(NETWORK_LABELS[network] || NEARBY_CONFIG[art].fallbackKind);
+    if (tags.roundtrip === "yes") parts.push("Rundtour");
+    parts.push(tour.lengthKm ? `Länge etwa ${fmtKm(tour.lengthKm)}` : "Länge unbekannt");
+    if (tour.nearestKm !== null) {
+      parts.push(tour.nearestKm < 0.3
+        ? "verläuft direkt am gewählten Ort"
+        : `kürzeste Entfernung zum Ort etwa ${fmtKm(tour.nearestKm)}`);
+    }
+    parts.push(tour.forestShare !== null
+      ? `Waldanteil etwa ${tour.forestShare} %`
+      : "Waldanteil derzeit nicht ermittelbar");
+    let text = parts.join(", ") + ".";
+    if (tour.clipped) {
+      text += " Die Tour führt über das Suchgebiet hinaus; Entfernung und Waldanteil beziehen sich auf den nahen Abschnitt.";
+    }
+    const description = tags.description || tags.note;
+    if (description) text += ` Beschreibung: ${description}${/[.!?]$/.test(description) ? "" : "."}`;
+    li.textContent = text;
+
+    if (tags.website || tags.url) {
+      li.append(" ");
+      const a = document.createElement("a");
+      a.href = tags.website || tags.url;
+      a.target = "_blank";
+      a.rel = "noopener";
+      a.textContent = "Website der Tour (öffnet in neuem Tab)";
+      li.appendChild(a);
+    }
+
+    li.append(" ");
+    const gpxButton = document.createElement("button");
+    gpxButton.type = "button";
+    gpxButton.textContent = `GPX-Datei für „${title}“ herunterladen`;
+    gpxButton.addEventListener("click", async () => {
+      gpxButton.disabled = true;
+      try {
+        setStatus(`Lade vollständigen Streckenverlauf von „${title}“ …`);
+        const segments = await fetchFullTrailGeometry(tour.id);
+        triggerGpxDownload({ name: title, segments });
+      } catch (err) {
+        setStatus(`Fehler: ${err.message}`);
+      } finally {
+        gpxButton.disabled = false;
+      }
+    });
+    li.appendChild(gpxButton);
+
+    list.appendChild(li);
+  }
+  el("naehe-ergebnis").hidden = false;
+}
+
+async function searchNearbyTours() {
+  const query = el("naehe-ort").value.trim();
+  const art = el("naehe-art").value;
+  const radiusM = parseInt(el("naehe-radius").value, 10) * 1000;
+  const minKm = parseFloat(el("naehe-min").value) || null;
+  const maxKm = parseFloat(el("naehe-max").value) || null;
+  const minForest = parseInt(el("naehe-wald").value, 10) || null;
+  const button = el("naehe-suchen-knopf");
+  if (!query) {
+    setStatus("Bitte einen Ort für die Tourensuche eingeben.");
+    return;
+  }
+  button.disabled = true;
+  el("naehe-ergebnis").hidden = true;
+  try {
+    setStatus("Suche Ort …");
+    const places = await geocode(query);
+    if (places.length === 0) {
+      setStatus(`Kein Ort für „${query}“ gefunden.`);
+      return;
+    }
+    const place = places[0];
+    const placeName = place.properties.name;
+    const [lon, lat] = place.geometry.coordinates;
+
+    setStatus(`Suche ${NEARBY_CONFIG[art].plural} rund um ${placeName} … Das kann eine halbe Minute dauern.`);
+    const candidates = await fetchNearbyCandidates(lat, lon, radiusM, art);
+
+    // Längenfilter; ohne bekannte Länge ist der Filter nicht prüfbar
+    let filtered = candidates.filter((c) => {
+      if (minKm === null && maxKm === null) return true;
+      if (c.lengthKm === null) return false;
+      return (minKm === null || c.lengthKm >= minKm) && (maxKm === null || c.lengthKm <= maxKm);
+    });
+    filtered.sort((a, b) => (a.centerKm ?? Infinity) - (b.centerKm ?? Infinity));
+    const shown = filtered.slice(0, NEARBY_MAX_RESULTS);
+
+    if (shown.length === 0) {
+      renderNearbyTours([], placeName, art);
+      setStatus(
+        `Keine passende Tour rund um ${placeName} gefunden` +
+        (candidates.length ? ` (${candidates.length} Touren lagen außerhalb der Längenfilter)` : "") +
+        ". Versuchen Sie einen größeren Suchradius oder andere Filterwerte."
+      );
+      return;
+    }
+
+    setStatus(`Lade Streckenverläufe von ${shown.length} Touren …`);
+    const geometries = await fetchNearbyGeometries(shown.map((c) => c.id), lat, lon, radiusM);
+
+    const sampleSets = [];
+    for (const tour of shown) {
+      const segments = geometries[tour.id] || [];
+      const flat = segments.flat();
+      tour.segments = segments;
+      tour.nearestKm = null;
+      tour.clipped = false;
+      tour.forestShare = null;
+      if (flat.length) {
+        let nearest = Infinity;
+        const step = Math.max(1, Math.floor(flat.length / 300));
+        for (let i = 0; i < flat.length; i += step) {
+          nearest = Math.min(nearest, haversineM(lat, lon, flat[i][0], flat[i][1]));
+        }
+        tour.nearestKm = nearest / 1000;
+        // Wurde die Geometrie am Suchgebietsrand abgeschnitten?
+        let fetchedM = 0;
+        for (const seg of segments) {
+          for (let i = 1; i < seg.length; i++) {
+            fetchedM += haversineM(seg[i - 1][0], seg[i - 1][1], seg[i][0], seg[i][1]);
+          }
+        }
+        tour.clipped = tour.lengthKm !== null && fetchedM / 1000 < tour.lengthKm * 0.85;
+      }
+      sampleSets.push(flat.length ? samplePoints(flat, FOREST_SAMPLES).map((s) => s.point) : null);
+    }
+
+    const shares = await computeForestShares(sampleSets, (step, total) =>
+      setStatus(`Ermittle Waldanteil entlang der Touren (Abfrage ${step} von ${total}) …`)
+    );
+    shown.forEach((tour, i) => { tour.forestShare = shares[i]; });
+
+    // Touren mit unbekanntem Waldanteil (Overpass-Teilausfall) bleiben in der
+    // Liste und werden entsprechend gekennzeichnet
+    let result = shown;
+    if (minForest !== null) {
+      result = result.filter((t) => t.forestShare === null || t.forestShare >= minForest);
+    }
+    result.sort((a, b) => (a.nearestKm ?? a.centerKm ?? Infinity) - (b.nearestKm ?? b.centerKm ?? Infinity));
+
+    renderNearbyTours(result, placeName, art);
+    setStatus(
+      `Tourensuche abgeschlossen: ${result.length} ${result.length === 1 ? "Tour" : "Touren"} rund um ${placeName}` +
+      (filtered.length > shown.length ? ` (die ${NEARBY_MAX_RESULTS} nächstgelegenen von ${filtered.length})` : "") +
+      ". Die Liste steht unter der Überschrift „Gefundene Touren“."
+    );
   } catch (err) {
     setStatus(`Fehler: ${err.message}`);
   } finally {
@@ -985,4 +1310,9 @@ el("komoot-gpx-knopf").addEventListener("click", () => {
 el("wege-formular").addEventListener("submit", (event) => {
   event.preventDefault();
   searchMarkedTrails();
+});
+
+el("naehe-formular").addEventListener("submit", (event) => {
+  event.preventDefault();
+  searchNearbyTours();
 });

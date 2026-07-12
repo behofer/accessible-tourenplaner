@@ -76,7 +76,7 @@ label {
   margin-bottom: 0.35rem;
 }
 
-input[type="text"], select {
+input[type="text"], input[type="number"], select {
   width: 100%;
   font-size: 1.125rem;
   padding: 0.6rem 0.7rem;
@@ -137,7 +137,7 @@ button[disabled] {
   margin-top: 1rem;
 }
 
-#ortsauswahl, #ergebnis, #komoot-ergebnis, #wege-ergebnis {
+#ortsauswahl, #ergebnis, #komoot-ergebnis, #wege-ergebnis, #naehe-ergebnis {
   border-top: 2px solid var(--border);
   padding-top: 0.5rem;
   margin-top: 2rem;
@@ -155,6 +155,14 @@ ol#wegbeschreibung-liste li,
 ul#hoehenprofil-liste li,
 ul#highlights-liste li {
   margin-bottom: 0.6rem;
+}
+
+ul#naehe-liste li { margin-bottom: 1.1rem; }
+ul#naehe-liste button {
+  display: block;
+  margin-top: 0.4rem;
+  font-size: 1rem;
+  padding: 0.5rem 1rem;
 }
 
 .anleitung {

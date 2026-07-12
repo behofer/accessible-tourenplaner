@@ -27,6 +27,8 @@
               aria-controls="panel-komoot" tabindex="-1">Komoot-Tour als Text anzeigen</button>
       <button type="button" role="tab" id="tab-wege" aria-selected="false"
               aria-controls="panel-wege" tabindex="-1">Markierte Wege finden</button>
+      <button type="button" role="tab" id="tab-naehe" aria-selected="false"
+              aria-controls="panel-naehe" tabindex="-1">Touren in der Nähe</button>
     </div>
 
     <!-- Statusmeldungen für Screenreader (Live-Region, gilt für alle Bereiche) -->
@@ -195,6 +197,65 @@
         <ul id="wege-liste"></ul>
       </section>
     </section>
+
+    <!-- ================= Bereich 4: Touren in der Nähe ================= -->
+    <section role="tabpanel" id="panel-naehe" aria-labelledby="tab-naehe" tabindex="0" hidden>
+      <h2 id="naehe-titel">Touren in der Nähe finden</h2>
+      <p>
+        Findet komplette, in OpenStreetMap eingetragene Touren rund um einen Ort –
+        auch ohne Start- und Zielpunkt zu kennen, zum Beispiel für unbekannte
+        Gegenden oder den Urlaub. Die Länge wird aus dem Streckenverlauf
+        berechnet; der Waldanteil wird über Stichprobenpunkte entlang der
+        Strecke geschätzt. Die Suche dauert je nach Region etwa 15 bis 45
+        Sekunden, der Fortschritt wird als Statusmeldung angesagt.
+      </p>
+      <form id="naehe-formular">
+        <div class="formularfeld">
+          <label for="naehe-ort">Ort oder Gegend</label>
+          <input type="text" id="naehe-ort" name="naehe-ort" required
+                 autocomplete="off" spellcheck="false"
+                 placeholder="z. B. Saulgrub">
+        </div>
+        <div class="formularfeld">
+          <label for="naehe-art">Tourenart</label>
+          <select id="naehe-art" name="naehe-art">
+            <option value="wandern" selected>Wandertouren</option>
+            <option value="rad">Radtouren</option>
+            <option value="mtb">Mountainbike-Touren</option>
+          </select>
+        </div>
+        <div class="formularfeld">
+          <label for="naehe-radius">Suchradius</label>
+          <select id="naehe-radius" name="naehe-radius">
+            <option value="5">5 Kilometer</option>
+            <option value="10" selected>10 Kilometer</option>
+            <option value="25">25 Kilometer</option>
+          </select>
+        </div>
+        <div class="formularfeld">
+          <label for="naehe-min">Länge mindestens in Kilometern (optional)</label>
+          <input type="number" id="naehe-min" name="naehe-min" min="0" step="any"
+                 inputmode="decimal" placeholder="z. B. 10">
+        </div>
+        <div class="formularfeld">
+          <label for="naehe-max">Länge höchstens in Kilometern (optional)</label>
+          <input type="number" id="naehe-max" name="naehe-max" min="0" step="any"
+                 inputmode="decimal" placeholder="z. B. 15">
+        </div>
+        <div class="formularfeld">
+          <label for="naehe-wald">Waldanteil mindestens in Prozent (optional)</label>
+          <input type="number" id="naehe-wald" name="naehe-wald" min="0" max="100" step="5"
+                 inputmode="numeric" placeholder="z. B. 50">
+        </div>
+        <button type="submit" id="naehe-suchen-knopf">Touren suchen</button>
+      </form>
+
+      <section id="naehe-ergebnis" aria-labelledby="naehe-liste-titel" hidden>
+        <h3 id="naehe-liste-titel">Gefundene Touren</h3>
+        <p id="naehe-status"></p>
+        <ul id="naehe-liste"></ul>
+      </section>
+    </section>
   </main>
 
   <footer>
@@ -209,7 +270,7 @@
       <li><strong>BRouter</strong> (brouter.de) – Routenberechnung mit Wanderweg-Präferenz und Höhendaten.</li>
       <li><strong>Valhalla</strong> (valhalla1.openstreetmap.de, FOSSGIS e. V.) – deutsche Abbiegehinweise, Ersatz-Routing.</li>
       <li><strong>Open-Meteo</strong> (api.open-meteo.com) – Höhendaten, falls BRouter nicht verfügbar ist.</li>
-      <li><strong>Overpass API</strong> (overpass-api.de) – Sehenswürdigkeiten aus OpenStreetMap entlang der Route.</li>
+      <li><strong>Overpass API</strong> (overpass-api.de) – Sehenswürdigkeiten entlang der Route sowie Tourensuche, Streckenverläufe und Waldanteil aus OpenStreetMap.</li>
       <li><strong>Komoot-API</strong> (www.komoot.com/api/v007) – nur lesender Zugriff auf öffentliche Komoot-Touren.</li>
       <li><strong>Waymarked Trails</strong> (waymarkedtrails.org) – offiziell markierte Wander- und Radwege aus OpenStreetMap.</li>
     </ul>

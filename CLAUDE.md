@@ -20,8 +20,9 @@ unzugänglich sind (Anlass: Post im ofsight-Forum). Mit NVDA getestet.
 
 ## Dateien
 
-- `index.html` — drei Tabs: Tourenplaner, Komoot-Tour als Text anzeigen,
-  Markierte Wege finden. Footer listet immer alle genutzten Schnittstellen.
+- `index.html` — vier Tabs: Tourenplaner, Komoot-Tour als Text anzeigen,
+  Markierte Wege finden, Touren in der Nähe. Footer listet immer alle
+  genutzten Schnittstellen.
 - `app.js` — gesamte Logik, nach Diensten in Abschnitte gegliedert.
 - `style.css` — Kontrast/Fokus/Tabs.
 - Starten: `python -m http.server 8000` im Projektordner.
@@ -49,6 +50,19 @@ Freigabe-Links wird durchgereicht. Es gibt bewusst **keine Komoot-Tour-Suche**:
 dafür existiert kein anonymer/offizieller Endpunkt (Suche nur mit Login =
 ToS-Grauzone).
 
+**Touren in der Nähe** (Suche ohne Start/Ziel): komplett über Overpass, weil
+Waymarked Trails keine Geometrie-API hat (alle `details/relation/{id}/geometry*`-
+Pfade → 404; nur Tags/Längen via `details/relation/{id}`). Eine Abfrage liefert
+Kandidaten + Länge (`foreach.routen->.r( way(r.r); make laenge id=r.u(id()),
+meter=sum(length()); out; )`), eine zweite die Geometrie aller Treffer mit
+Clipping (`out geom(bbox)` — hält Fernwanderwege klein; wenn geclippt, steht
+ein Hinweis am Treffer). Waldanteil: 12 Stichprobenpunkte je Tour per
+`is_in(...)->.p; area.p[~"^(landuse|natural)$"~"^(forest|wood)$"]; out count;`
+— die count-Elemente kommen in Blockreihenfolge zurück. GPX lädt die volle
+Geometrie erst beim Klick (`out geom` ohne bbox). Eigene Rundtouren-Generierung
+(osmnx/networkx) bräuchte ein Python-Backend → verstößt gegen „kein Backend“;
+browsertauglicher Weg wäre OpenRouteService `round_trip` (siehe Ideen).
+
 ## Stolperfallen (gemerkt, weil selbst hineingelaufen)
 
 - Komoot-Belagscodes haben Präfix `sf#`, Wegarten `wt#` (nicht `sb#`).
@@ -64,6 +78,12 @@ ToS-Grauzone).
   Valhallas `/height` liefert auf dem FOSSGIS-Server nur `null`.
 - Valhalla-Polylines haben Genauigkeit 1e-6 (nicht 1e-5); pro Leg dekodieren,
   verkettete Shape-Strings sind nicht dekodierbar.
+- Overpass (overpass-api.de) antwortet unter Last sporadisch mit 429/502/504 —
+  `overpassQuery()` wiederholt deshalb bis zu 3-mal mit wachsender Pause.
+  Mehr als ~12 `is_in`-Blöcke pro Abfrage provozieren 504.
+- Der OSM-`distance`-Tag ist laut Wiki in km, kommt aber auch als „12,5“,
+  „12.5 km“ oder „450 m“ vor (`parseDistanceKm()`); die aus den Wegen
+  summierte Länge (`sum(length())`) ist verlässlicher, wenn > 0.
 
 ## Testen
 
@@ -84,6 +104,8 @@ OpenRouteService/GraphHopper mit API-Schlüssel wechseln.
 ## Nächste Schritte (Ideen)
 
 - Rundtouren („10 km ab X“) via OpenRouteService `round_trip` (kostenloser Key)
+- „Touren in der Nähe“: mehr Filterkriterien (Anstieg, Belag), Ergebnis
+  direkt im Tourenplaner-Tab als Text-Wegbeschreibung öffnen
 - URL-Sharing der geplanten Route, GPX-Import markierter Wege als Tourbasis
 - ÖPNV-Anbindung von Start/Ziel
 - Weitere Tests mit Screenreader-Nutzenden (JAWS, VoiceOver, TalkBack)
