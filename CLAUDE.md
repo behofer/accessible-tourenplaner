@@ -36,8 +36,11 @@ Deshalb:
 1. **BRouter** berechnet die Geometrie (Profile: `hiking-mountain`, `trekking`,
    `mtb`, `fastbike`) — bevorzugt Wanderwege/Pfade, liefert Höhe pro Punkt und
    die Wegarten-Statistik (WayTags in `properties.messages`).
-2. **Valhalla** bekommt die BRouter-Geometrie als ~15 `through`-Punkte und
-   verbalisiert denselben Weg als deutsche Abbiegehinweise.
+2. **Valhalla** bekommt die BRouter-Geometrie als ~15 `through`-Punkte
+   (mit `radius: 50`, Wiederholung mit 7 bzw. 0 Punkten bei Fehlschlag) und
+   verbalisiert denselben Weg als deutsche Abbiegehinweise. Weicht die
+   Valhalla-Länge > 15 % von der BRouter-Länge ab, steht ein Hinweis unter
+   der Wegbeschreibung.
    Wichtig: `pedestrian` braucht `max_hiking_difficulty: 6`, sonst weigert sich
    Valhalla, den Bergpfaden zu folgen.
 3. Fallback bei BRouter-Ausfall: direktes Valhalla-Routing + Open-Meteo-Höhen.
@@ -87,6 +90,13 @@ browsertauglicher Weg wäre OpenRouteService `round_trip` (siehe Ideen).
   Valhallas `/height` liefert auf dem FOSSGIS-Server nur `null`.
 - Valhalla-Polylines haben Genauigkeit 1e-6 (nicht 1e-5); pro Leg dekodieren,
   verkettete Shape-Strings sind nicht dekodierbar.
+- Valhalla mit `through`-Punkten: **ein** schlecht aufs Wegenetz einrastender
+  Zwischenpunkt lässt die ganze Anfrage mit HTTP 400 („No path could be
+  found“) scheitern — Hauptursache für „Wegbeschreibung fehlt oft“. Abhilfe:
+  `radius: 50` an den Zwischenpunkten, nahe Duplikate herausfiltern
+  (`dropClosePoints`, BRouter wiederholt Punkte an Via-Übergängen) und mit
+  weniger Zwischenpunkten wiederholen (15 → 7 → 0). Der FOSSGIS-Server
+  liefert außerdem sporadisch 429/5xx → wie bei Overpass wiederholen.
 - Overpass (overpass-api.de) antwortet unter Last sporadisch mit 429/502/504 —
   `overpassQuery()` wiederholt deshalb bis zu 3-mal mit wachsender Pause.
   Mehr als ~12 `is_in`-Blöcke pro Abfrage provozieren 504.

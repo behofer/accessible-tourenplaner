@@ -177,6 +177,11 @@ function getPositionOnce(options) {
 }
 
 function geolocationErrorMessage(err) {
+  // Eigene Fehler (kein Geolocation-Support, unsicherer Kontext) bringen
+  // bereits eine verständliche Meldung mit – nicht durch die generische ersetzen
+  if (err && typeof err.code !== "number" && typeof err.message === "string" && err.message) {
+    return err.message;
+  }
   if (err && typeof err.code === "number") {
     if (err.code === 1) {
       return "Der Zugriff auf den Standort wurde nicht erlaubt. Bitte erlauben Sie " +
@@ -293,7 +298,8 @@ async function fetchBrouterRoute(locations, activity) {
   if (!res.ok) throw new Error(`BRouter: ${text.slice(0, 120)}`);
   let data;
   try { data = JSON.parse(text); } catch (e) { throw new Error(`BRouter: ${text.slice(0, 120)}`); }
-  const feature = data.features[0];
+  const feature = data.features && data.features[0];
+  if (!feature) throw new Error("BRouter: keine Route gefunden");
   return {
     // Koordinaten kommen als [lon, lat, ele] -> [lat, lon] plus Höhenliste
     points: feature.geometry.coordinates.map((c) => [c[1], c[0]]),
@@ -329,39 +335,80 @@ function wayTypeBreakdown(properties) {
     .filter((s) => !s.startsWith("0 %"));
 }
 
-async function fetchValhallaRoute(locations, activity) {
+async function fetchValhallaRoute(locations, activity, throughRadius) {
   const config = ACTIVITY_CONFIG[activity];
   const body = {
-    locations: locations.map((loc, i) => ({
-      lat: loc[0],
-      lon: loc[1],
-      type: i === 0 || i === locations.length - 1 ? "break" : "through",
-    })),
+    locations: locations.map((loc, i) => {
+      const isBreak = i === 0 || i === locations.length - 1;
+      const location = { lat: loc[0], lon: loc[1], type: isBreak ? "break" : "through" };
+      // Zwischenpunkte stammen aus der BRouter-Geometrie und liegen oft neben
+      // dem Valhalla-Wegenetz – ohne Suchradius rasten sie nicht ein
+      if (!isBreak && throughRadius) location.radius = throughRadius;
+      return location;
+    }),
     costing: config.costing,
     costing_options: config.options ? { [config.costing]: config.options } : undefined,
     language: "de-DE",
     units: "kilometers",
   };
-  const res = await fetch(VALHALLA_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
+  // Der FOSSGIS-Server antwortet unter Last sporadisch mit 429/5xx – kurz
+  // wiederholen; echte Routing-Fehler (HTTP 400) sofort melden
+  for (let attempt = 1; ; attempt++) {
+    const res = await fetch(VALHALLA_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (res.ok) return res.json();
+    if (attempt < 3 && [429, 500, 502, 503, 504].includes(res.status)) {
+      await new Promise((resolve) => setTimeout(resolve, attempt * 2000));
+      continue;
+    }
     let detail = "";
     try { detail = (await res.json()).error || ""; } catch (e) { /* ignorieren */ }
     throw new Error(`Routenberechnung fehlgeschlagen. ${detail}`);
   }
-  return res.json();
+}
+
+// Aufeinanderfolgende, (fast) identische Punkte entfernen – die BRouter-
+// Geometrie wiederholt Punkte an Via-Übergängen, und doppelte Zwischenpunkte
+// lassen Valhalla-Anfragen scheitern
+function dropClosePoints(points, minMeters) {
+  const out = [points[0]];
+  for (const p of points.slice(1)) {
+    const last = out[out.length - 1];
+    if (haversineM(last[0], last[1], p[0], p[1]) >= minMeters) out.push(p);
+  }
+  return out;
 }
 
 // Abbiegehinweise für eine vorhandene Route: die BRouter-Geometrie wird als
-// Zwischenpunkte an Valhalla übergeben, das denselben Weg dann verbalisiert
+// Zwischenpunkte an Valhalla übergeben, das denselben Weg dann verbalisiert.
+// Ein einziger Zwischenpunkt, der schlecht auf das Valhalla-Wegenetz
+// einrastet, lässt die ganze Anfrage mit HTTP 400 („No path could be found“)
+// scheitern – deshalb wird mit immer weniger Zwischenpunkten wiederholt.
+// Liefert { maneuvers, lengthKm } (Valhalla-Länge zum Abgleich mit BRouter).
 async function fetchInstructionsForTrack(points, activity) {
-  const via = samplePoints(points, 17).slice(1, -1).map((s) => s.point);
-  const locations = [points[0], ...via, points[points.length - 1]];
-  const data = await fetchValhallaRoute(locations, activity);
-  return data.trip.legs.flatMap((l) => l.maneuvers);
+  const start = points[0];
+  const end = points[points.length - 1];
+  let lastError;
+  for (const viaCount of [15, 7, 0]) {
+    const via = samplePoints(points, viaCount + 2).slice(1, -1).map((s) => s.point);
+    const locations = dropClosePoints([start, ...via], 25);
+    const last = locations[locations.length - 1];
+    if (locations.length > 1 && haversineM(last[0], last[1], end[0], end[1]) < 25) locations.pop();
+    locations.push(end);
+    try {
+      const data = await fetchValhallaRoute(locations, activity, 50);
+      return {
+        maneuvers: data.trip.legs.flatMap((l) => l.maneuvers),
+        lengthKm: data.trip.summary ? data.trip.summary.length : null,
+      };
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError;
 }
 
 // ---------------------------------------------------------------------------
@@ -1183,7 +1230,7 @@ function renderPlaceChoices(fields) {
   el("ortsauswahl").hidden = false;
 }
 
-function renderRoute({ activity, points, elevations, brouterProps, maneuvers, placeNames }) {
+function renderRoute({ activity, points, elevations, brouterProps, maneuvers, maneuversKm, placeNames }) {
   const config = ACTIVITY_CONFIG[activity];
   const cumDist = cumulativeDistances(points);
   const distanceKm = cumDist[cumDist.length - 1] / 1000;
@@ -1191,11 +1238,14 @@ function renderRoute({ activity, points, elevations, brouterProps, maneuvers, pl
   const routeName = `${placeNames.start} nach ${placeNames.ziel} (${config.label})`;
   state.route = { name: routeName, points, elevations };
 
-  // Höhenstatistik aus den BRouter-Höhen
+  // Höhenstatistik aus den BRouter-Höhen; vereinzelte Lücken in den
+  // Höhenwerten werden übersprungen statt die ganze Auswertung zu verwerfen
   let elevation = null;
-  if (elevations && elevations.every((e) => e !== undefined && e !== null)) {
-    const samples = samplePoints(points, 200).map((s) => ({ ...s, elevation: elevations[s.index] }));
-    elevation = { samples, stats: elevationStats(samples) };
+  if (elevations) {
+    const samples = samplePoints(points, 200)
+      .map((s) => ({ ...s, elevation: elevations[s.index] }))
+      .filter((s) => typeof s.elevation === "number" && isFinite(s.elevation));
+    if (samples.length >= 10) elevation = { samples, stats: elevationStats(samples) };
   }
 
   // Übersicht
@@ -1257,9 +1307,23 @@ function renderRoute({ activity, points, elevations, brouterProps, maneuvers, pl
       stepsList.appendChild(li);
       kmSoFar += m.length;
     }
+    // Der Ansage-Dienst folgt der Route nicht immer exakt – bei deutlicher
+    // Abweichung ehrlich darauf hinweisen (wichtig für die Navigation)
+    if (maneuversKm && Math.abs(maneuversKm - distanceKm) / distanceKm > 0.15) {
+      const li = document.createElement("li");
+      li.textContent =
+        `Hinweis: Die Wegbeschreibung weicht stellenweise von der berechneten Route ab ` +
+        `(Ansagen für ${fmtKm(maneuversKm)}, Route ${fmtKm(distanceKm)}). ` +
+        `Distanz und Höhenprofil oben gelten für die Route; die GPX-Datei enthält den exakten Verlauf.`;
+      stepsList.appendChild(li);
+    }
   } else {
     const li = document.createElement("li");
-    li.textContent = "Die Abbiegehinweise konnten für diese Route nicht erzeugt werden. Die GPX-Datei enthält den vollständigen Streckenverlauf.";
+    li.textContent =
+      "Die Abbiegehinweise konnten gerade nicht erzeugt werden – der Ansage-Dienst war " +
+      "nicht erreichbar oder konnte dem Weg nicht folgen. Meist hilft es, die Route über " +
+      "„Mit dieser Auswahl neu berechnen“ noch einmal zu berechnen. " +
+      "Die GPX-Datei enthält den vollständigen Streckenverlauf.";
     stepsList.appendChild(li);
   }
 
@@ -1337,14 +1401,20 @@ async function planRoute({ regeocode }) {
     }
 
     setStatus("Berechne Route (Wanderwege werden bevorzugt) …");
-    let points, elevations = null, brouterProps = null, maneuvers = null;
+    let points, elevations = null, brouterProps = null, maneuvers = null, maneuversKm = null;
     try {
       const brouterRoute = await fetchBrouterRoute(locations, activity);
       points = brouterRoute.points;
       elevations = brouterRoute.elevations;
       brouterProps = brouterRoute.properties;
       setStatus("Erzeuge Wegbeschreibung …");
-      maneuvers = await fetchInstructionsForTrack(points, activity).catch(() => null);
+      try {
+        const instructions = await fetchInstructionsForTrack(points, activity);
+        maneuvers = instructions.maneuvers;
+        maneuversKm = instructions.lengthKm;
+      } catch (e2) {
+        // Route trotzdem anzeigen – renderRoute erklärt die fehlenden Hinweise
+      }
     } catch (e) {
       // Fallback: direkte Valhalla-Route, wenn BRouter nicht erreichbar ist
       setStatus("Wanderweg-Routing nicht erreichbar, nutze Standard-Routing …");
@@ -1361,7 +1431,7 @@ async function planRoute({ regeocode }) {
       } catch (e2) { /* Route auch ohne Höhendaten anzeigen */ }
     }
 
-    const { cumDist } = renderRoute({ activity, points, elevations, brouterProps, maneuvers, placeNames });
+    const { cumDist } = renderRoute({ activity, points, elevations, brouterProps, maneuvers, maneuversKm, placeNames });
     setStatus(
       `Route gefunden: ${fmtKm(cumDist[cumDist.length - 1] / 1000)} von ${placeNames.start} nach ${placeNames.ziel}. ` +
       `Die Ergebnisse stehen unter der Überschrift „Ihre Route“.`
